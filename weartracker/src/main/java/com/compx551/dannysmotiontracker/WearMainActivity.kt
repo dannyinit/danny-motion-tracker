@@ -61,6 +61,10 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
     private var hasAccel by mutableStateOf(true)
     private var hasGyro by mutableStateOf(true)
 
+    private var phoneConnected by mutableStateOf(false)
+    private var batchCount by mutableStateOf(0)
+    private var targetNodeId: String? = null
+
     private val sensorBuffer = mutableListOf<SensorSample>()
     private var batchJob: Job? = null
 
@@ -75,7 +79,9 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
                             accelData = accelData,
                             gyroData = gyroData,
                             hasAccel = hasAccel,
-                            hasGyro = hasGyro
+                            hasGyro = hasGyro,
+                            phoneConnected = phoneConnected,
+                            batchCount = batchCount
                         )
                     }
                 }
@@ -102,13 +108,32 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         super.onPause()
         sensorManager.unregisterListener(this)
         stopBatching()
+        
+        synchronized(sensorBuffer) {
+            sensorBuffer.clear()
+        }
+        targetNodeId = null
+        phoneConnected = false
+        batchCount = 0
     }
 
     private fun startBatching() {
         batchJob = lifecycleScope.launch(Dispatchers.Default) {
             while (isActive) {
-                delay(200)
-                sendBatchedData()
+                delay(200L)
+                
+                if (targetNodeId == null) {
+                    try {
+                        val nodes = Tasks.await(Wearable.getNodeClient(this@WearMainActivity).connectedNodes)
+                        targetNodeId = nodes.firstOrNull()?.id
+                        phoneConnected = targetNodeId != null
+                    } catch (_: Exception) {
+                        targetNodeId = null
+                        phoneConnected = false
+                    }
+                }
+                
+                targetNodeId?.let { sendBatchedData(it) }
             }
         }
     }
@@ -118,7 +143,7 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         batchJob = null
     }
 
-    private fun sendBatchedData() {
+    private fun sendBatchedData(nodeId: String) {
         val samples = synchronized(sensorBuffer) {
             if (sensorBuffer.isEmpty()) return
             val list = sensorBuffer.toList()
@@ -127,9 +152,6 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         }
 
         try {
-            val nodes = Tasks.await(Wearable.getNodeClient(this).connectedNodes)
-            val phoneNode = nodes.firstOrNull() ?: return
-            
             // [Type(1)] [Timestamp(8)] [X(4)] [Y(4)] [Z(4)] = 21 bytes per sample
             val buffer = ByteBuffer.allocate(samples.size * 21)
             for (sample in samples) {
@@ -140,12 +162,19 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
                 buffer.putFloat(sample.z)
             }
             
-            Wearable.getMessageClient(this).sendMessage(
-                phoneNode.id,
-                "/sensors",
-                buffer.array()
+            Tasks.await(
+                Wearable.getMessageClient(this).sendMessage(
+                    nodeId,
+                    "/sensors",
+                    buffer.array()
+                )
             )
+            batchCount++
+            phoneConnected = true
         } catch (e: Exception) {
+            targetNodeId = null
+            phoneConnected = false
+            batchCount = 0
             e.printStackTrace()
         }
     }
@@ -185,6 +214,8 @@ fun SensorDashboard(
     gyroData: SensorData,
     hasAccel: Boolean,
     hasGyro: Boolean,
+    phoneConnected: Boolean,
+    batchCount: Int,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -232,6 +263,14 @@ fun SensorDashboard(
         } else {
             Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
         }
+
+        // Connection Status Footer
+        Text(
+            text = if (phoneConnected) "Connected • Sent: $batchCount" else "Searching...",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (phoneConnected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 8.dp)
+        )
     }
 }
 
@@ -283,7 +322,9 @@ fun SensorDashboardPreview() {
                     accelData = SensorData(9.81f, 0.05f, -0.12f),
                     gyroData = SensorData(0.01f, -0.02f, 0.03f),
                     hasAccel = true,
-                    hasGyro = true
+                    hasGyro = true,
+                    phoneConnected = true,
+                    batchCount = 42
                 )
             }
         }
