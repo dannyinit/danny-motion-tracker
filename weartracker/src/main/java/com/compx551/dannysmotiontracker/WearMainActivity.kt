@@ -36,8 +36,19 @@ import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import com.compx551.dannysmotiontracker.ui.theme.DannysMotionTrackerTheme
 import com.compx551.dannysmotiontracker.ui.theme.SensorLabelColor
+import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.Wearable
+import java.nio.ByteBuffer
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 
 data class SensorData(val x: Float = 0f, val y: Float = 0f, val z: Float = 0f)
+
+data class SensorSample(val type: Int, val timestamp: Long, val x: Float, val y: Float, val z: Float)
 
 class WearMainActivity : ComponentActivity(), SensorEventListener {
 
@@ -49,6 +60,9 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
     private var gyroData by mutableStateOf(SensorData())
     private var hasAccel by mutableStateOf(true)
     private var hasGyro by mutableStateOf(true)
+
+    private val sensorBuffer = mutableListOf<SensorSample>()
+    private var batchJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,15 +94,76 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         gyroscope?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
+        
+        startBatching()
     }
 
     override fun onPause() {
         super.onPause()
         sensorManager.unregisterListener(this)
+        stopBatching()
+    }
+
+    private fun startBatching() {
+        batchJob = lifecycleScope.launch(Dispatchers.Default) {
+            while (isActive) {
+                delay(200)
+                sendBatchedData()
+            }
+        }
+    }
+
+    private fun stopBatching() {
+        batchJob?.cancel()
+        batchJob = null
+    }
+
+    private fun sendBatchedData() {
+        val samples = synchronized(sensorBuffer) {
+            if (sensorBuffer.isEmpty()) return
+            val list = sensorBuffer.toList()
+            sensorBuffer.clear()
+            list
+        }
+
+        try {
+            val nodes = Tasks.await(Wearable.getNodeClient(this).connectedNodes)
+            val phoneNode = nodes.firstOrNull() ?: return
+            
+            // [Type(1)] [Timestamp(8)] [X(4)] [Y(4)] [Z(4)] = 21 bytes per sample
+            val buffer = ByteBuffer.allocate(samples.size * 21)
+            for (sample in samples) {
+                buffer.put(sample.type.toByte())
+                buffer.putLong(sample.timestamp)
+                buffer.putFloat(sample.x)
+                buffer.putFloat(sample.y)
+                buffer.putFloat(sample.z)
+            }
+            
+            Wearable.getMessageClient(this).sendMessage(
+                phoneNode.id,
+                "/sensors",
+                buffer.array()
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
         event ?: return
+        val sample = SensorSample(
+            type = if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) 0 else 1,
+            timestamp = event.timestamp,
+            x = event.values[0],
+            y = event.values[1],
+            z = event.values[2]
+        )
+        
+        synchronized(sensorBuffer) {
+            sensorBuffer.add(sample)
+        }
+
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
                 accelData = SensorData(event.values[0], event.values[1], event.values[2])
