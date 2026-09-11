@@ -8,23 +8,34 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
+import java.util.Locale
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+
+import androidx.wear.compose.material3.AppScaffold
+import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.Text
 import com.compx551.dannysmotiontracker.ui.theme.DannysMotionTrackerTheme
+import com.compx551.dannysmotiontracker.ui.theme.SensorLabelColor
 
 data class SensorData(val x: Float = 0f, val y: Float = 0f, val z: Float = 0f)
 
@@ -44,14 +55,15 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         enableEdgeToEdge()
         setContent {
             DannysMotionTrackerTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    SensorDashboard(
-                        accelData = accelData,
-                        gyroData = gyroData,
-                        hasAccel = hasAccel,
-                        hasGyro = hasGyro,
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                AppScaffold {
+                    ScreenScaffold {
+                        SensorDashboard(
+                            accelData = accelData,
+                            gyroData = gyroData,
+                            hasAccel = hasAccel,
+                            hasGyro = hasGyro
+                        )
+                    }
                 }
             }
         }
@@ -100,59 +112,105 @@ fun SensorDashboard(
     hasGyro: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val scrollState = rememberScrollState()
-    
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(scrollState)
-            // Padding added to ensure content doesn't clip immediately on round screens
-            .padding(horizontal = 16.dp, vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Danny's Motion Tracker",
+            text = "Motion Tracker",
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 16.dp)
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 4.dp)
         )
 
+        // Accelerometer Block
         Text(
             text = "Accelerometer",
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 4.dp)
+            color = MaterialTheme.colorScheme.tertiary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(bottom = 2.dp)
         )
         if (hasAccel) {
-            Text(text = "X: ${"%.2f".format(accelData.x)}")
-            Text(text = "Y: ${"%.2f".format(accelData.y)}")
-            Text(text = "Z: ${"%.2f".format(accelData.z)}")
+            SensorDataRow(accelData)
         } else {
-            Text(text = "Sensor Not Available")
+            Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
         }
 
+        // Gyroscope Block
         Text(
             text = "Gyroscope",
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+            color = MaterialTheme.colorScheme.tertiary,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
         )
         if (hasGyro) {
-            Text(text = "X: ${"%.2f".format(gyroData.x)}")
-            Text(text = "Y: ${"%.2f".format(gyroData.y)}")
-            Text(text = "Z: ${"%.2f".format(gyroData.z)}")
+            SensorDataRow(gyroData)
         } else {
-            Text(text = "Sensor Not Available")
+            Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+@Composable
+fun SensorDataRow(data: SensorData) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        SensorValueText(label = "X", value = data.x, modifier = Modifier.weight(1f))
+        SensorValueText(label = "Y", value = data.y, modifier = Modifier.weight(1f))
+        SensorValueText(label = "Z", value = data.z, modifier = Modifier.weight(1f))
+    }
+}
+
+@Composable
+fun SensorValueText(label: String, value: Float, modifier: Modifier = Modifier) {
+    val annotatedString = buildAnnotatedString {
+        withStyle(
+            style = SpanStyle(
+                color = SensorLabelColor,
+                fontWeight = FontWeight.ExtraBold
+            )
+        ) {
+            append("$label:")
+        }
+        withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.onSurface)) {
+            // Using simple formatting to keep the number close to the label.
+            append(String.format(Locale.US, "%.1f", value))
+        }
+    }
+
+    Text(
+        text = annotatedString,
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.bodySmall,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+    )
 }
 
 @Preview(showBackground = true)
 @Composable
 fun SensorDashboardPreview() {
     DannysMotionTrackerTheme {
-        SensorDashboard(
-            accelData = SensorData(9.81f, 0.05f, -0.12f),
-            gyroData = SensorData(0.01f, -0.02f, 0.03f),
-            hasAccel = true,
-            hasGyro = true
-        )
+        AppScaffold {
+            ScreenScaffold {
+                SensorDashboard(
+                    accelData = SensorData(9.81f, 0.05f, -0.12f),
+                    gyroData = SensorData(0.01f, -0.02f, 0.03f),
+                    hasAccel = true,
+                    hasGyro = true
+                )
+            }
+        }
     }
 }
