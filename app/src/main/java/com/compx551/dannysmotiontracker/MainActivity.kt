@@ -27,7 +27,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -268,7 +271,14 @@ fun MotionDashboard(
                 
                 Text("Accelerometer", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
                 Text(
-                    text = String.format(java.util.Locale.US, "X: % 6.2f  Y: % 6.2f  Z: % 6.2f", accelX, accelY, accelZ),
+                    text = buildAnnotatedString {
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("X: ") }
+                        append(String.format(java.util.Locale.US, "%.2f  ", accelX))
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Y: ") }
+                        append(String.format(java.util.Locale.US, "%.2f  ", accelY))
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Z: ") }
+                        append(String.format(java.util.Locale.US, "%.2f", accelZ))
+                    },
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -277,7 +287,14 @@ fun MotionDashboard(
                 
                 Text("Gyroscope", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
                 Text(
-                    text = String.format(java.util.Locale.US, "X: % 6.2f  Y: % 6.2f  Z: % 6.2f", gyroX, gyroY, gyroZ),
+                    text = buildAnnotatedString {
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("X: ") }
+                        append(String.format(java.util.Locale.US, "%.2f  ", gyroX))
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Y: ") }
+                        append(String.format(java.util.Locale.US, "%.2f  ", gyroY))
+                        withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Z: ") }
+                        append(String.format(java.util.Locale.US, "%.2f", gyroZ))
+                    },
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodyMedium
                 )

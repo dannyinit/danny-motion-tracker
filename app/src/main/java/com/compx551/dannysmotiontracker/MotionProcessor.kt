@@ -18,8 +18,8 @@ data class MotionMetrics(
 class MotionProcessor {
 
     // Fixed Tuning Parameters
-    val accelVarianceThreshold: Float = 0.6f
-    val gyroMagnitudeThreshold: Float = 1.5f
+    val accelVarianceThreshold: Float = 0.8f
+    val gyroMagnitudeThreshold: Float = 2.5f
     
     // EMA Alpha (Lower = heavier smoothing)
     var emaAlpha: Float = 0.1f
