@@ -9,7 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +30,8 @@ import java.util.Locale
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
+import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
@@ -48,23 +50,30 @@ import kotlinx.coroutines.Dispatchers
 
 data class SensorData(val x: Float = 0f, val y: Float = 0f, val z: Float = 0f)
 
+/**
+ * Represents a single sensor reading to be sent to the phone.
+ */
 data class SensorSample(val type: Int, val timestamp: Long, val x: Float, val y: Float, val z: Float)
 
 class WearMainActivity : ComponentActivity(), SensorEventListener {
 
+    // Lazy initialization ensures system services are accessed only after the Activity is created.
     private val sensorManager by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
     private val accelerometer: Sensor? by lazy { sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) }
     private val gyroscope: Sensor? by lazy { sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE) }
 
+    // Live UI states
     private var accelData by mutableStateOf(SensorData())
     private var gyroData by mutableStateOf(SensorData())
-    private var hasAccel by mutableStateOf(true)
-    private var hasGyro by mutableStateOf(true)
+    private var hasAccel by mutableStateOf(false)
+    private var hasGyro by mutableStateOf(false)
 
+    // Data layer connection states
     private var phoneConnected by mutableStateOf(false)
     private var batchCount by mutableStateOf(0)
     private var targetNodeId: String? = null
 
+    // Buffer for batching high-frequency sensor readings
     private val sensorBuffer = mutableListOf<SensorSample>()
     private var batchJob: Job? = null
 
@@ -94,6 +103,7 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         hasAccel = accelerometer != null
         hasGyro = gyroscope != null
 
+        // Register sensors only while the app is in the foreground to save battery.
         accelerometer?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
@@ -106,9 +116,11 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
 
     override fun onPause() {
         super.onPause()
+        // Unregister listeners immediately when leaving the app.
         sensorManager.unregisterListener(this)
         stopBatching()
         
+        // Clear buffers and reset connection states to ensure a fresh start on resume.
         synchronized(sensorBuffer) {
             sensorBuffer.clear()
         }
@@ -117,11 +129,15 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         batchCount = 0
     }
 
+    /**
+     * Starts a coroutine loop that bundles and sends data to the phone every 200ms.
+     */
     private fun startBatching() {
         batchJob = lifecycleScope.launch(Dispatchers.Default) {
             while (isActive) {
                 delay(200L)
                 
+                // Self-healing: Automatically look for the phone if not connected.
                 if (targetNodeId == null) {
                     try {
                         val nodes = Tasks.await(Wearable.getNodeClient(this@WearMainActivity).connectedNodes)
@@ -143,6 +159,9 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         batchJob = null
     }
 
+    /**
+     * Packages all readings currently in the buffer into a compact binary message.
+     */
     private fun sendBatchedData(nodeId: String) {
         val samples = synchronized(sensorBuffer) {
             if (sensorBuffer.isEmpty()) return
@@ -152,7 +171,7 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
         }
 
         try {
-            // [Type(1)] [Timestamp(8)] [X(4)] [Y(4)] [Z(4)] = 21 bytes per sample
+            // Binary format: [Type(1 byte)] [Timestamp(8 bytes)] [X(4)] [Y(4)] [Z(4)] = 21 bytes per sample.
             val buffer = ByteBuffer.allocate(samples.size * 21)
             for (sample in samples) {
                 buffer.put(sample.type.toByte())
@@ -162,6 +181,7 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
                 buffer.putFloat(sample.z)
             }
             
+            // Blocking wait for the task to ensure we detect hardware disconnections via exceptions.
             Tasks.await(
                 Wearable.getMessageClient(this).sendMessage(
                     nodeId,
@@ -172,15 +192,17 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
             batchCount++
             phoneConnected = true
         } catch (e: Exception) {
+            // Reset connection on failure so the self-healing loop can retry.
             targetNodeId = null
             phoneConnected = false
             batchCount = 0
-            e.printStackTrace()
         }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
         event ?: return
+        
+        // Convert raw event values into an immutable sample for the buffer.
         val sample = SensorSample(
             type = if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) 0 else 1,
             timestamp = event.timestamp,
@@ -193,6 +215,7 @@ class WearMainActivity : ComponentActivity(), SensorEventListener {
             sensorBuffer.add(sample)
         }
 
+        // Update local UI states for the watch display.
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
                 accelData = SensorData(event.values[0], event.values[1], event.values[2])
@@ -218,59 +241,73 @@ fun SensorDashboard(
     batchCount: Int,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 8.dp),
+    val columnState = rememberTransformingLazyColumnState()
+
+    // TransformingLazyColumn makes the Wear OS screen scrollable and adaptable to additional content.
+    TransformingLazyColumn(
+        state = columnState,
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = 32.dp, bottom = 32.dp, start = 8.dp, end = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text(
-            text = "Motion Tracker",
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.primary,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-
-        // Accelerometer Block
-        Text(
-            text = "Accelerometer",
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.tertiary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(bottom = 2.dp)
-        )
-        if (hasAccel) {
-            SensorDataRow(accelData)
-        } else {
-            Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
+        item {
+            Text(
+                text = "Motion Tracker",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
         }
 
-        // Gyroscope Block
-        Text(
-            text = "Gyroscope",
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.tertiary,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
-        )
-        if (hasGyro) {
-            SensorDataRow(gyroData)
-        } else {
-            Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
+        // Accelerometer Section
+        item {
+            Text(
+                text = "Accelerometer",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.tertiary,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        item {
+            if (hasAccel) {
+                SensorDataRow(accelData)
+            } else {
+                Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
+            }
         }
 
-        // Connection Status Footer
-        Text(
-            text = if (phoneConnected) "Connected • Sent: $batchCount" else "Searching...",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (phoneConnected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(top = 8.dp)
-        )
+        // Gyroscope Section
+        item {
+            Text(
+                text = "Gyroscope",
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.tertiary,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        item {
+            if (hasGyro) {
+                SensorDataRow(gyroData)
+            } else {
+                Text(text = "Sensor Not Available", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        // Connection Feedback Footer
+        item {
+            Text(
+                text = if (phoneConnected) "Connected • Sent: $batchCount" else "Searching...",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (phoneConnected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
     }
 }
 
@@ -298,7 +335,6 @@ fun SensorValueText(label: String, value: Float, modifier: Modifier = Modifier) 
             append("$label:")
         }
         withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.onSurface)) {
-            // Using simple formatting to keep the number close to the label.
             append(String.format(Locale.US, "%.1f", value))
         }
     }

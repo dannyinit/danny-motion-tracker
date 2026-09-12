@@ -27,6 +27,7 @@ import java.nio.ByteBuffer
 
 class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListener {
 
+    // Live UI states for the latest sensor readings received from the watch.
     private var accelX by mutableStateOf(0f)
     private var accelY by mutableStateOf(0f)
     private var accelZ by mutableStateOf(0f)
@@ -52,24 +53,33 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
 
     override fun onResume() {
         super.onResume()
+        // Register the message listener only while the app is in the foreground.
         Wearable.getMessageClient(this).addListener(this)
     }
 
     override fun onPause() {
         super.onPause()
+        // Unregister the listener to prevent unnecessary background processing.
         Wearable.getMessageClient(this).removeListener(this)
     }
 
+    /**
+     * Callback triggered when a message arrives from the watch via the Wear OS Data Layer.
+     */
     override fun onMessageReceived(messageEvent: MessageEvent) {
+        // Verify the message path matches our expected sensor stream.
         if (messageEvent.path == "/sensors") {
             val buffer = ByteBuffer.wrap(messageEvent.data)
+            
+            // Iterate through all samples in the batched message.
             while (buffer.hasRemaining()) {
                 val type = buffer.get().toInt()
-                val timestamp = buffer.long
+                val timestamp = buffer.long // Extracted but not used in current UI display
                 val x = buffer.float
                 val y = buffer.float
                 val z = buffer.float
 
+                // Update the respective state variables to trigger a UI recomposition.
                 if (type == 0) { // Accelerometer
                     accelX = x
                     accelY = y
