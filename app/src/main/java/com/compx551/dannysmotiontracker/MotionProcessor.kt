@@ -18,7 +18,7 @@ data class MotionMetrics(
 class MotionProcessor {
 
     // Tuning Parameters (can be adjusted live via UI)
-    var accelVarianceThreshold: Float = 2.0f
+    var accelVarianceThreshold: Float = 0.6f
     var gyroMagnitudeThreshold: Float = 1.5f
     
     // EMA Alpha (Lower = heavier smoothing)
@@ -56,8 +56,8 @@ class MotionProcessor {
             val cutoffTime = timestampNs - windowDurationNs
             accelMagnitudeWindow.removeAll { it.first < cutoffTime }
             
-            // Add new sample to window
-            accelMagnitudeWindow.add(Pair(timestampNs, smoothedAccel))
+            // Add new RAW sample to window
+            accelMagnitudeWindow.add(Pair(timestampNs, lastAccelMag))
 
             // 4. Calculate Variance
             lastAccelVariance = calculateVariance(accelMagnitudeWindow.map { it.second })

@@ -26,6 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,6 +45,14 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
     // Live UI states
     private var currentMetrics by mutableStateOf(MotionMetrics())
     
+    // Raw Sensor States
+    private var accelX by mutableStateOf(0f)
+    private var accelY by mutableStateOf(0f)
+    private var accelZ by mutableStateOf(0f)
+    private var gyroX by mutableStateOf(0f)
+    private var gyroY by mutableStateOf(0f)
+    private var gyroZ by mutableStateOf(0f)
+    
     // Sliders states
     private var uiAccelThreshold by mutableFloatStateOf(motionProcessor.accelVarianceThreshold)
     private var uiGyroThreshold by mutableFloatStateOf(motionProcessor.gyroMagnitudeThreshold)
@@ -54,6 +65,8 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MotionDashboard(
                         metrics = currentMetrics,
+                        accelX = accelX, accelY = accelY, accelZ = accelZ,
+                        gyroX = gyroX, gyroY = gyroY, gyroZ = gyroZ,
                         accelThreshold = uiAccelThreshold,
                         gyroThreshold = uiGyroThreshold,
                         onAccelThresholdChange = { 
@@ -93,13 +106,22 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
                 val y = buffer.float
                 val z = buffer.float
 
+                if (type == 0) {
+                    accelX = x
+                    accelY = y
+                    accelZ = z
+                } else if (type == 1) {
+                    gyroX = x
+                    gyroY = y
+                    gyroZ = z
+                }
+
                 // Process each event independently as it arrives
                 currentMetrics = motionProcessor.processEvent(
                     type = type,
                     timestampNs = timestamp,
                     x = x, y = y, z = z
                 )
-                // Update the respective state variables to trigger a UI recomposition.
             }
         }
     }
@@ -108,84 +130,130 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
 @Composable
 fun MotionDashboard(
     metrics: MotionMetrics,
+    accelX: Float, accelY: Float, accelZ: Float,
+    gyroX: Float, gyroY: Float, gyroZ: Float,
     accelThreshold: Float,
     gyroThreshold: Float,
     onAccelThresholdChange: (Float) -> Unit,
     onGyroThresholdChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val scrollState = rememberScrollState()
+
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Motion State", 
+            text = "Danny's Motion Tracker", 
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(top = 16.dp)
         )
         
-        // Large State Display
-        Surface(
-            color = when(metrics.currentState) {
-                MotionState.IDLE -> Color.LightGray
-                MotionState.TWISTING -> Color(0xFF64B5F6) // Light Blue
-                MotionState.ACTIVE -> Color(0xFF81C784) // Light Green
-            },
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 16.dp)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // State Display Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = metrics.currentState.name,
-                style = MaterialTheme.typography.displayMedium,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(24.dp)
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Current State", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    color = when(metrics.currentState) {
+                        MotionState.IDLE -> Color.LightGray
+                        MotionState.TWISTING -> Color(0xFF64B5F6) // Light Blue
+                        MotionState.ACTIVE -> Color(0xFF81C784) // Light Green
+                    },
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = metrics.currentState.name,
+                        style = MaterialTheme.typography.displayMedium,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Metrics Display
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.Start
+        // Raw Sensor Data Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Live Metrics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(8.dp))
-            MetricRow("Accel Mag (Smoothed):", metrics.smoothedAccelMagnitude)
-            MetricRow("Gyro Mag (Smoothed):", metrics.smoothedGyroMagnitude)
-            MetricRow("Accel Variance (1s):", metrics.accelVariance)
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text("Raw Sensor Data", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text("Accelerometer", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+                Text(
+                    text = String.format(java.util.Locale.US, "X: % 6.2f  Y: % 6.2f  Z: % 6.2f", accelX, accelY, accelZ),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text("Gyroscope", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+                Text(
+                    text = String.format(java.util.Locale.US, "X: % 6.2f  Y: % 6.2f  Z: % 6.2f", gyroX, gyroY, gyroZ),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // Developer Tuning Tools
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
+        // Metrics & Tuning Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Developer Tuning", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Text("Accel Variance Threshold: ${"%.1f".format(accelThreshold)}")
-            Slider(
-                value = accelThreshold,
-                onValueChange = onAccelThresholdChange,
-                valueRange = 0.5f..20f
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text("Processed Metrics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                MetricRow("Accel Mag (Smoothed):", metrics.smoothedAccelMagnitude)
+                MetricRow("Gyro Mag (Smoothed):", metrics.smoothedGyroMagnitude)
+                MetricRow("Accel Variance (1s):", metrics.accelVariance)
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                Text("Developer Tuning", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text("Accel Variance Threshold: ${"%.2f".format(accelThreshold)}")
+                Slider(
+                    value = accelThreshold,
+                    onValueChange = onAccelThresholdChange,
+                    valueRange = 0.1f..20f
+                )
 
-            Text("Gyro Mag Threshold: ${"%.1f".format(gyroThreshold)}")
-            Slider(
-                value = gyroThreshold,
-                onValueChange = onGyroThresholdChange,
-                valueRange = 0.5f..10f
-            )
+                Text("Gyro Mag Threshold: ${"%.1f".format(gyroThreshold)}")
+                Slider(
+                    value = gyroThreshold,
+                    onValueChange = onGyroThresholdChange,
+                    valueRange = 0.5f..10f
+                )
+            }
         }
+        
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
