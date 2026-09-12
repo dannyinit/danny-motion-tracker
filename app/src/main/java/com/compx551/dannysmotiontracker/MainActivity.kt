@@ -8,27 +8,37 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -45,6 +55,9 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
     // Live UI states
     private var currentMetrics by mutableStateOf(MotionMetrics())
     
+    // State History Timeline (Max 150 items for ~30 seconds of history)
+    private val stateHistory = mutableStateListOf<MotionState>()
+    
     // Raw Sensor States
     private var accelX by mutableStateOf(0f)
     private var accelY by mutableStateOf(0f)
@@ -53,10 +66,8 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
     private var gyroY by mutableStateOf(0f)
     private var gyroZ by mutableStateOf(0f)
     
-    // Sliders states
-    private var uiAccelThreshold by mutableFloatStateOf(motionProcessor.accelVarianceThreshold)
-    private var uiGyroThreshold by mutableFloatStateOf(motionProcessor.gyroMagnitudeThreshold)
-
+    // Sliders states are no longer needed
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -67,16 +78,9 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
                         metrics = currentMetrics,
                         accelX = accelX, accelY = accelY, accelZ = accelZ,
                         gyroX = gyroX, gyroY = gyroY, gyroZ = gyroZ,
-                        accelThreshold = uiAccelThreshold,
-                        gyroThreshold = uiGyroThreshold,
-                        onAccelThresholdChange = { 
-                            uiAccelThreshold = it
-                            motionProcessor.accelVarianceThreshold = it 
-                        },
-                        onGyroThresholdChange = { 
-                            uiGyroThreshold = it
-                            motionProcessor.gyroMagnitudeThreshold = it 
-                        },
+                        history = stateHistory,
+                        accelThreshold = motionProcessor.accelVarianceThreshold,
+                        gyroThreshold = motionProcessor.gyroMagnitudeThreshold,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -99,6 +103,9 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
             val buffer = ByteBuffer.wrap(messageEvent.data)
             
             // Iterate through all samples in the batched message.
+            // Dominant state for the current 200ms batch
+            var batchDominantState = MotionState.IDLE
+
             while (buffer.hasRemaining()) {
                 val type = buffer.get().toInt()
                 val timestamp = buffer.long
@@ -107,21 +114,30 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
                 val z = buffer.float
 
                 if (type == 0) {
-                    accelX = x
-                    accelY = y
-                    accelZ = z
+                    accelX = x; accelY = y; accelZ = z
                 } else if (type == 1) {
-                    gyroX = x
-                    gyroY = y
-                    gyroZ = z
+                    gyroX = x; gyroY = y; gyroZ = z
                 }
 
                 // Process each event independently as it arrives
-                currentMetrics = motionProcessor.processEvent(
+                val metrics = motionProcessor.processEvent(
                     type = type,
                     timestampNs = timestamp,
                     x = x, y = y, z = z
                 )
+                currentMetrics = metrics
+
+                // Aggregation: Track the highest priority state seen in this batch
+                // Priority: ACTIVE (2) > TWISTING (1) > IDLE (0)
+                if (metrics.currentState.ordinal > batchDominantState.ordinal) {
+                    batchDominantState = metrics.currentState
+                }
+            }
+
+            // Append the batch's dominant state to history
+            stateHistory.add(batchDominantState)
+            if (stateHistory.size > 150) {
+                stateHistory.removeAt(0)
             }
         }
     }
@@ -132,10 +148,9 @@ fun MotionDashboard(
     metrics: MotionMetrics,
     accelX: Float, accelY: Float, accelZ: Float,
     gyroX: Float, gyroY: Float, gyroZ: Float,
+    history: List<MotionState>,
     accelThreshold: Float,
     gyroThreshold: Float,
-    onAccelThresholdChange: (Float) -> Unit,
-    onGyroThresholdChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -149,7 +164,8 @@ fun MotionDashboard(
     ) {
         Text(
             text = "Danny's Motion Tracker", 
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(top = 16.dp)
         )
         
@@ -187,6 +203,58 @@ fun MotionDashboard(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // State History Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text("State History (30s)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(8.dp))
+                StateHistoryTimeline(history = history)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Metrics Card
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text("Live Visualisations", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text("Accel Variance", style = MaterialTheme.typography.labelLarge)
+                ThresholdMetricBar(
+                    value = metrics.accelVariance,
+                    threshold = accelThreshold,
+                    activeColor = Color(0xFF81C784)
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                Text("Gyro Magnitude", style = MaterialTheme.typography.labelLarge)
+                ThresholdMetricBar(
+                    value = metrics.smoothedGyroMagnitude,
+                    threshold = gyroThreshold,
+                    activeColor = Color(0xFF64B5F6)
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+                Text("Numeric Metrics", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
+                MetricRow("Accel Variance (1s):", metrics.accelVariance)
+                MetricRow("Gyro Mag (Smoothed):", metrics.smoothedGyroMagnitude)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Raw Sensor Data Card
         ElevatedCard(
             modifier = Modifier.fillMaxWidth()
@@ -215,45 +283,82 @@ fun MotionDashboard(
                 )
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Metrics & Tuning Card
-        ElevatedCard(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalAlignment = Alignment.Start
-            ) {
-                Text("Processed Metrics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.height(8.dp))
-                MetricRow("Accel Mag (Smoothed):", metrics.smoothedAccelMagnitude)
-                MetricRow("Gyro Mag (Smoothed):", metrics.smoothedGyroMagnitude)
-                MetricRow("Accel Variance (1s):", metrics.accelVariance)
-                
-                Spacer(modifier = Modifier.height(24.dp))
-                
-                Text("Developer Tuning", style = MaterialTheme.typography.titleSmall, color = Color.Gray)
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Text("Accel Variance Threshold: ${"%.2f".format(accelThreshold)}")
-                Slider(
-                    value = accelThreshold,
-                    onValueChange = onAccelThresholdChange,
-                    valueRange = 0.1f..20f
-                )
-
-                Text("Gyro Mag Threshold: ${"%.1f".format(gyroThreshold)}")
-                Slider(
-                    value = gyroThreshold,
-                    onValueChange = onGyroThresholdChange,
-                    valueRange = 0.5f..10f
-                )
-            }
-        }
         
         Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+@Composable
+fun ThresholdMetricBar(
+    value: Float,
+    threshold: Float,
+    activeColor: Color
+) {
+    // Threshold is at 50% width.
+    val progress = (value / (threshold * 2)).coerceIn(0f, 1f)
+    val isTriggered = value >= threshold
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .drawBehind {
+                    // Draw background track
+                    drawRect(color = Color.LightGray.copy(alpha = 0.3f), size = size)
+                    
+                    // Draw fill
+                    drawRect(
+                        color = if (isTriggered) activeColor else Color.Gray,
+                        size = Size(width = size.width * progress, height = size.height)
+                    )
+                    
+                    // Draw threshold line (center)
+                    drawLine(
+                        color = Color.Black,
+                        start = Offset(x = size.width / 2, y = 0f),
+                        end = Offset(x = size.width / 2, y = size.height),
+                        strokeWidth = 2.dp.toPx()
+                    )
+                }
+        )
+    }
+}
+
+@Composable
+fun StateHistoryTimeline(history: List<MotionState>) {
+    val listState = rememberLazyListState()
+    
+    // Automatically scroll to the end when new items are added
+    LaunchedEffect(history.size) {
+        if (history.isNotEmpty()) {
+            listState.animateScrollToItem(history.size - 1)
+        }
+    }
+
+    LazyRow(
+        state = listState,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp),
+        horizontalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        items(history) { state ->
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .drawBehind {
+                        drawRect(
+                            color = when (state) {
+                                MotionState.IDLE -> Color.LightGray
+                                MotionState.TWISTING -> Color(0xFF64B5F6)
+                                MotionState.ACTIVE -> Color(0xFF81C784)
+                            }
+                        )
+                    }
+            )
+        }
     }
 }
 
