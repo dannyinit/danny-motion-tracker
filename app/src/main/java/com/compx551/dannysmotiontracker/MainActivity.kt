@@ -109,7 +109,9 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
             // Dominant state for the current 200ms batch
             var batchDominantState = MotionState.IDLE
 
-            while (buffer.hasRemaining()) {
+            // Each sensor record is exactly 21 bytes.
+            // Only proceed if there is enough data for a complete record to avoid crashes.
+            while (buffer.remaining() >= 21) {
                 val type = buffer.get().toInt()
                 val timestamp = buffer.long
                 val x = buffer.float
