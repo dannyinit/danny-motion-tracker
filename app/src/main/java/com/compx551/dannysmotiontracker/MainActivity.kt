@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,11 +20,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,28 +45,13 @@ import com.compx551.dannysmotiontracker.ui.theme.DannysMotionTrackerTheme
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
-import java.nio.ByteBuffer
+import java.util.Locale
 
 class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListener {
 
-    private val motionProcessor = MotionProcessor()
+    // ViewModel persists the state history and sensor data during screen rotation.
+    private val viewModel: MotionViewModel by viewModels()
 
-    // Live UI states
-    private var currentMetrics by mutableStateOf(MotionMetrics())
-    
-    // State History Timeline (Max 150 items for ~30 seconds of history)
-    private val stateHistory = mutableStateListOf<MotionState>()
-    
-    // Raw Sensor States
-    private var accelX by mutableStateOf(0f)
-    private var accelY by mutableStateOf(0f)
-    private var accelZ by mutableStateOf(0f)
-    private var gyroX by mutableStateOf(0f)
-    private var gyroY by mutableStateOf(0f)
-    private var gyroZ by mutableStateOf(0f)
-    
-    // Sliders states are no longer needed
-    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -78,12 +59,13 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
             DannysMotionTrackerTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MotionDashboard(
-                        metrics = currentMetrics,
-                        accelX = accelX, accelY = accelY, accelZ = accelZ,
-                        gyroX = gyroX, gyroY = gyroY, gyroZ = gyroZ,
-                        history = stateHistory,
-                        accelThreshold = motionProcessor.accelVarianceThreshold,
-                        gyroThreshold = motionProcessor.gyroMagnitudeThreshold,
+                        metrics = viewModel.currentMetrics,
+                        accelX = viewModel.accelX, accelY = viewModel.accelY, accelZ = viewModel.accelZ,
+                        gyroX = viewModel.gyroX, gyroY = viewModel.gyroY, gyroZ = viewModel.gyroZ,
+                        history = viewModel.stateHistory,
+                        updateCounter = viewModel.historyUpdateCounter,
+                        accelThreshold = viewModel.accelThreshold,
+                        gyroThreshold = viewModel.gyroThreshold,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
@@ -93,57 +75,20 @@ class MainActivity : ComponentActivity(), MessageClient.OnMessageReceivedListene
 
     override fun onResume() {
         super.onResume()
+        // Register for sensor updates from the watch only when in foreground.
         Wearable.getMessageClient(this).addListener(this)
     }
 
     override fun onPause() {
         super.onPause()
+        // Unregister to save battery and processing when app is in background.
         Wearable.getMessageClient(this).removeListener(this)
     }
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
+        // Delegate all parsing and history aggregation logic to the ViewModel.
         if (messageEvent.path == "/sensors") {
-            val buffer = ByteBuffer.wrap(messageEvent.data)
-            
-            // Iterate through all samples in the batched message.
-            // Dominant state for the current 200ms batch
-            var batchDominantState = MotionState.IDLE
-
-            // Each sensor record is exactly 21 bytes.
-            // Only proceed if there is enough data for a complete record to avoid crashes.
-            while (buffer.remaining() >= 21) {
-                val type = buffer.get().toInt()
-                val timestamp = buffer.long
-                val x = buffer.float
-                val y = buffer.float
-                val z = buffer.float
-
-                if (type == 0) {
-                    accelX = x; accelY = y; accelZ = z
-                } else if (type == 1) {
-                    gyroX = x; gyroY = y; gyroZ = z
-                }
-
-                // Process each event independently as it arrives
-                val metrics = motionProcessor.processEvent(
-                    type = type,
-                    timestampNs = timestamp,
-                    x = x, y = y, z = z
-                )
-                currentMetrics = metrics
-
-                // Aggregation: Track the highest priority state seen in this batch
-                // Priority: ACTIVE (2) > TWISTING (1) > IDLE (0)
-                if (metrics.currentState.ordinal > batchDominantState.ordinal) {
-                    batchDominantState = metrics.currentState
-                }
-            }
-
-            // Append the batch's dominant state to history
-            stateHistory.add(batchDominantState)
-            if (stateHistory.size > 150) {
-                stateHistory.removeAt(0)
-            }
+            viewModel.processSensorBatch(messageEvent.data)
         }
     }
 }
@@ -154,6 +99,7 @@ fun MotionDashboard(
     accelX: Float, accelY: Float, accelZ: Float,
     gyroX: Float, gyroY: Float, gyroZ: Float,
     history: List<MotionState>,
+    updateCounter: Int,
     accelThreshold: Float,
     gyroThreshold: Float,
     modifier: Modifier = Modifier
@@ -176,7 +122,7 @@ fun MotionDashboard(
         
         Spacer(modifier = Modifier.height(16.dp))
 
-        // State Display Card
+        // State Display Card: Highlights the current classified motion.
         ElevatedCard(
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -208,7 +154,7 @@ fun MotionDashboard(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // State History Card
+        // State History Card: Shows a scrolling 30-second "barcode" timeline.
         ElevatedCard(
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -216,15 +162,15 @@ fun MotionDashboard(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 horizontalAlignment = Alignment.Start
             ) {
-                Text("State History (30s)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("State History", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(8.dp))
-                StateHistoryTimeline(history = history)
+                StateHistoryTimeline(history = history, updateCounter = updateCounter)
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Metrics Card
+        // Metrics Card: Shows animated intensity bars for tuning visualization.
         ElevatedCard(
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -260,7 +206,7 @@ fun MotionDashboard(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Raw Sensor Data Card
+        // Raw Sensor Data Card: For technical verification of the incoming stream.
         ElevatedCard(
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -275,11 +221,11 @@ fun MotionDashboard(
                 Text(
                     text = buildAnnotatedString {
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("X: ") }
-                        append(String.format(java.util.Locale.US, "%.2f  ", accelX))
+                        append(String.format(Locale.US, "%.2f  ", accelX))
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Y: ") }
-                        append(String.format(java.util.Locale.US, "%.2f  ", accelY))
+                        append(String.format(Locale.US, "%.2f  ", accelY))
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Z: ") }
-                        append(String.format(java.util.Locale.US, "%.2f", accelZ))
+                        append(String.format(Locale.US, "%.2f", accelZ))
                     },
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodyMedium
@@ -291,11 +237,11 @@ fun MotionDashboard(
                 Text(
                     text = buildAnnotatedString {
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("X: ") }
-                        append(String.format(java.util.Locale.US, "%.2f  ", gyroX))
+                        append(String.format(Locale.US, "%.2f  ", gyroX))
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Y: ") }
-                        append(String.format(java.util.Locale.US, "%.2f  ", gyroY))
+                        append(String.format(Locale.US, "%.2f  ", gyroY))
                         withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append("Z: ") }
-                        append(String.format(java.util.Locale.US, "%.2f", gyroZ))
+                        append(String.format(Locale.US, "%.2f", gyroZ))
                     },
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodyMedium
@@ -313,7 +259,7 @@ fun ThresholdMetricBar(
     threshold: Float,
     activeColor: Color
 ) {
-    // Threshold is at 50% width.
+    // Maps the value so that the threshold is always precisely at the 50% midpoint.
     val progress = (value / (threshold * 2)).coerceIn(0f, 1f)
     val isTriggered = value >= threshold
 
@@ -323,16 +269,14 @@ fun ThresholdMetricBar(
                 .fillMaxWidth()
                 .height(24.dp)
                 .drawBehind {
-                    // Draw background track
                     drawRect(color = Color.LightGray.copy(alpha = 0.3f), size = size)
                     
-                    // Draw fill
                     drawRect(
                         color = if (isTriggered) activeColor else Color.Gray,
                         size = Size(width = size.width * progress, height = size.height)
                     )
                     
-                    // Draw threshold line (center)
+                    // Vertical line marking the classification boundary.
                     drawLine(
                         color = Color.Black,
                         start = Offset(x = size.width / 2, y = 0f),
@@ -345,11 +289,12 @@ fun ThresholdMetricBar(
 }
 
 @Composable
-fun StateHistoryTimeline(history: List<MotionState>) {
+fun StateHistoryTimeline(history: List<MotionState>, updateCounter: Int) {
     val listState = rememberLazyListState()
     
-    // Automatically scroll to the end when new items are added
-    LaunchedEffect(history.size) {
+    // Automatically scroll to the end when new items are added to keep the timeline current.
+    // updateCounter ensures the effect triggers even if the history size stays at its 150-item limit.
+    LaunchedEffect(updateCounter) {
         if (history.isNotEmpty()) {
             listState.animateScrollToItem(history.size - 1)
         }
@@ -389,7 +334,7 @@ fun MetricRow(label: String, value: Float) {
     ) {
         Text(text = label, style = MaterialTheme.typography.bodyMedium)
         Text(
-            text = String.format(java.util.Locale.US, "%.3f", value), 
+            text = String.format(Locale.US, "%.3f", value), 
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold
         )
